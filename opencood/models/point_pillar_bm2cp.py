@@ -60,11 +60,17 @@ class MultiModalFusion(nn.Module):
     def forward(self, img_voxel, pc_dict):
         pc_voxel = pc_dict['spatial_features_3d']
         B, C, Z, Y, X = pc_voxel.shape
+        print(f"[MultiModalFusion] pc_voxel shape: {pc_voxel.shape}, img_voxel shape: {img_voxel.shape}")
+        print(f"[MultiModalFusion] pc_voxel device: {pc_voxel.device}, img_voxel device: {img_voxel.device}")
 
         # pc->pc; img->img*mask; pc+img->
         ones_mask = torch.ones_like(pc_voxel).to(pc_voxel.device)
         zeros_mask = torch.zeros_like(pc_voxel).to(pc_voxel.device)
         mask = torch.ones_like(pc_voxel).to(pc_voxel.device)
+
+        print(f"[MultiModalFusion] ones_mask shape: {ones_mask.shape}, zeros_mask shape: {zeros_mask.shape}")
+        print(f"[MultiModalFusion] ones_mask device: {ones_mask.device}, zeros_mask device: {zeros_mask.device}")
+
         
         pc_mask = torch.where(pc_voxel!=0, ones_mask, zeros_mask)
         pc_mask, _ = torch.max(pc_mask, dim=1)
@@ -75,6 +81,9 @@ class MultiModalFusion(nn.Module):
 
         fused_voxel = pc_mask*img_mask*self.multifuse(torch.cat([self.act(self.multigate(pc_voxel))*img_voxel, pc_voxel], dim=1))
         fused_voxel = fused_voxel + pc_voxel*pc_mask*(1-img_mask) + img_voxel*self.img_fusion(img_voxel, pc_voxel)*(1-pc_mask)*img_mask
+
+        print(f"[MultiModalFusion] fused_voxel shape: {fused_voxel.shape}")
+        print(f"[MultiModalFusion] pc_mask shape: {pc_mask.shape}, img_mask shape: {img_mask.shape}")
 
         thres_map = pc_mask*img_mask*0 + pc_mask*(1-img_mask)*0.5 + (1-pc_mask)*img_mask*0.5 + (1-pc_mask)*(1-img_mask)*0.5
         mask = pc_mask*img_mask + pc_mask*(1-img_mask)*2 + (1-pc_mask)*img_mask*3 + (1-pc_mask)*(1-img_mask)*4
@@ -89,20 +98,22 @@ class MultiModalFusion(nn.Module):
         return pc_dict, thres_map, torch.min(mask, dim=2)[0], torch.stack([mask1, mask2])
     
 class PointPillarBM2CP(nn.Module):
-    def create_frustum(self):
-        # make grid in image plane
-        ogfH, ogfW = self.data_aug_conf['final_dim']
-        fH, fW = ogfH // self.downsample, ogfW // self.downsample
-        ds = torch.tensor(depth_discretization(*self.grid_conf['ddiscr'], self.grid_conf['mode']), dtype=torch.float).view(-1,1,1).expand(-1, fH, fW)
 
+    def create_frustum(self):
+        # ... and replace it with this one.
+
+        # === THE FINAL FIX: Use the correct, full image dimensions from the config ===
+        ogfH, ogfW = self.data_aug_conf['H'], self.data_aug_conf['W']
+        # === END FIX ===
+        
+        fH, fW = ogfH // self.downsample, ogfW // self.downsample
+        ds = torch.tensor(depth_discretization(*self.grid_conf['ddiscr'], self.grid_conf['mode']), dtype=torch.float).view(-1, 1, 1).expand(-1, fH, fW)
         D, _, _ = ds.shape
         xs = torch.linspace(0, ogfW - 1, fW, dtype=torch.float).view(1, 1, fW).expand(D, fH, fW)
         ys = torch.linspace(0, ogfH - 1, fH, dtype=torch.float).view(1, fH, 1).expand(D, fH, fW)
-
-        # D x H x W x 3
         frustum = torch.stack((xs, ys, ds), -1)
-        return frustum
-    
+        return nn.Parameter(frustum, requires_grad=False)
+       
     def __init__(self, args):
         super(PointPillarBM2CP, self).__init__()
         # cuda选择
@@ -203,6 +214,60 @@ class PointPillarBM2CP(nn.Module):
         cum_sum_len = torch.cumsum(record_len, dim=0)
         split_x = torch.tensor_split(x, cum_sum_len[:-1].cpu())
         return split_x
+
+    def get_feature(self, data_dict):
+        """
+        This is the corrected feature extraction method. It mirrors the logic
+        of the original forward() pass and returns the complete, updated batch_dict
+        containing all necessary tensors for the edge.
+        """
+        image_inputs_dict = data_dict['image_inputs']
+        pc_inputs_dict = data_dict['processed_lidar']
+        record_len = data_dict['record_len']
+
+        # Create the initial batch dictionary for the LiDAR pipeline
+        batch_dict = {'voxel_features': pc_inputs_dict['voxel_features'],
+                      'voxel_coords': pc_inputs_dict['voxel_coords'],
+                      'voxel_num_points': pc_inputs_dict['voxel_num_points'],
+                      'record_len': record_len}
+        
+        # Run the LiDAR VFE and the custom Scatter module
+        batch_dict = self.pillar_vfe(batch_dict)
+        batch_dict = self.scatter(batch_dict)
+        
+        # Run the Camera branch
+        geom = self.get_geometry(image_inputs_dict)
+        x = image_inputs_dict['imgs']
+        B, N, C, imH, imW = x.shape
+        x = x.view(B*N, C, imH, imW)
+        _, x = self.camencode(x, image_inputs_dict.get('depth_map'), record_len)
+        x = rearrange(x, '(b l) c d h w -> b l c d h w', b=B, l=N)
+        x = x.permute(0, 1, 3, 4, 5, 2)
+        x = self.voxel_pooling(geom, x)
+        
+        # Run the Fusion module and capture all its outputs, updating batch_dict
+        batch_dict, thres_map, mask, each_mask = self.fusion(x, batch_dict)
+        
+        # Run the Backbone on the fused features, updating batch_dict
+        batch_dict = self.backbone(batch_dict)
+        
+        # Add the other fusion outputs to the dictionary to be sent to the edge
+        batch_dict['thres_map'] = thres_map
+        batch_dict['mask'] = mask
+        batch_dict['each_mask'] = each_mask
+        
+        # The 'bev_feature' is the output of the backbone, which is now in 'spatial_features_2d'
+        # We will also add the regression map (rm) as the edge will need it
+        spatial_features_2d = batch_dict['spatial_features_2d']
+        if self.shrink_flag:
+            spatial_features_2d = self.shrink_conv(spatial_features_2d)
+        
+        batch_dict['rm'] = self.reg_head(spatial_features_2d)
+        # Overwrite spatial_features_2d in case shrink_conv was used
+        batch_dict['spatial_features_2d'] = spatial_features_2d
+
+        # Return the entire dictionary, which now contains everything the edge needs
+        return batch_dict
 
     def forward(self, data_dict):   # loss: 5.91->0.76
         # get two types data
@@ -317,6 +382,72 @@ class PointPillarBM2CP(nn.Module):
         
         return output_dict
 
+    def forward(self, data_dict):
+        print("[MODEL DEBUG] [forward] START")
+        lidar_inputs = data_dict['processed_lidar']
+        image_inputs = data_dict['image_inputs']
+        
+        # LiDAR Branch
+        print("[MODEL DEBUG] [forward] Calling pillar_vfe...")
+        batch_dict = self.pillar_vfe(lidar_inputs)
+        pillar_features, coords = batch_dict['pillar_features'], batch_dict['voxel_coords']
+        print(f"[MODEL DEBUG] [forward] VFE output pillar_features shape: {pillar_features.shape}")
+        
+        lidar_voxel_features = torch.zeros(
+            (1, self.pillar_vfe.get_output_feature_dim(), self.scatter.nz, self.scatter.ny, self.scatter.nx),
+            dtype=torch.float32, device=pillar_features.device
+        )
+        print(f"[MODEL DEBUG] [forward] Created empty 3D LiDAR grid with shape: {lidar_voxel_features.shape}")
+        lidar_voxel_features[coords[:, 0], :, coords[:, 1], coords[:, 2], coords[:, 3]] = pillar_features
+        print("[MODEL DEBUG] [forward] Scattered pillar features into 3D grid.")
+
+        # Camera Branch
+        print("[MODEL DEBUG] [forward] Calling get_geometry...")
+        geom = self.get_geometry(image_inputs)
+        print(f"[MODEL DEBUG] [forward] get_geometry returned geom with shape: {geom.shape}")
+        
+        x_cam = image_inputs['imgs']
+        B, N, C, H, W = x_cam.shape
+        x_cam = x_cam.view(B * N, C, H, W)
+        
+        print("[MODEL DEBUG] [forward] Calling camencode...")
+        _, x_cam = self.camencode(x_cam, image_inputs.get('depth_map'), data_dict['record_len'])
+        print(f"[MODEL DEBUG] [forward] camencode returned features with shape: {x_cam.shape}")
+        
+        x_cam = x_cam.view(B, N, self.bevC, self.D, H//self.downsample, W//self.downsample).permute(0, 1, 3, 4, 5, 2)
+        
+        print("[MODEL DEBUG] [forward] Calling voxel_pooling...")
+        camera_voxel_features = self.voxel_pooling(geom, x_cam)
+        print(f"[MODEL DEBUG] [forward] Voxel pooling returned camera features with shape: {camera_voxel_features.shape}")
+        
+        # Fusion
+        print("[MODEL DEBUG] [forward] Calling fusion module...")
+        print(f"[MODEL DEBUG] [forward] Camera voxel features shape: {camera_voxel_features.shape}, LiDAR voxel features shape: {lidar_voxel_features.shape}")
+        print(f"[MODEL DEBUG] [forward] Camera voxel features device: {camera_voxel_features.device}, LiDAR voxel features device: {lidar_voxel_features.device}")
+        fused_2d_bev = self.fusion(camera_voxel_features, lidar_voxel_features)
+        print(f"[MODEL DEBUG] [forward] Fusion module returned 2D BEV map with shape: {fused_2d_bev.shape}")
+        
+        # Backbone and Heads
+        print("[MODEL DEBUG] [forward] Calling backbone...")
+        final_features = self.backbone(fused_2d_bev)
+        print(f"[MODEL DEBUG] [forward] Backbone returned features with shape: {final_features.shape}")
+        
+        if self.shrink_flag:
+            final_features = self.shrink_conv(final_features)
+        
+        psm = self.cls_head(final_features)
+        rm = self.reg_head(final_features)
+        print(f"[MODEL DEBUG] [forward] Heads output shapes: psm: {psm.shape}, rm: {rm.shape}")
+        
+        output_dict = {'psm': psm, 'rm': rm}
+        if self.use_dir:
+            output_dict['dm'] = self.dir_head(final_features)
+        
+        self.bev_feature = psm
+        print(f"[MODEL DEBUG] [forward] Output dictionary keys: {output_dict.keys()}")
+        print("[MODEL DEBUG] [forward] COMPLETE")
+        return output_dict
+    
     def get_geometry(self, image_inputs_dict):
         """Determine the (x,y,z) locations (in the ego frame)
         of the points in the point cloud.
@@ -406,3 +537,4 @@ class PointPillarBM2CP(nn.Module):
 
         # return collapsed_final#, x  # final: 4 x 64 x 240 x 240  # B, C, H, W
         return final
+

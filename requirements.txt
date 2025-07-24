@@ -14,5 +14,5 @@ tensorboardX
 shapely
 einops
 efficientnet_pytorch
-mmcv
+#mmcv-full==1.4.0
 timm

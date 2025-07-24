@@ -276,14 +276,18 @@ class VoxelPostprocessor(BasePostprocessor):
             assert cav_id in output_dict
             # the transformation matrix to ego space
             transformation_matrix = cav_content['transformation_matrix'] # no clean
+            print(f'Processing {cav_id}...')
 
             # (H, W, anchor_num, 7)
             anchor_box = cav_content['anchor_box']
+            print(f'Anchor box shape: {anchor_box.shape}')
 
             # classification probability
             prob = output_dict[cav_id]['psm']
             prob = F.sigmoid(prob.permute(0, 2, 3, 1))
             prob = prob.reshape(1, -1)
+            print(f'Probability shape: {prob.shape}')
+            print(f'Probability: {prob}')
 
             # regression map
             reg = output_dict[cav_id]['rm']
@@ -342,14 +346,19 @@ class VoxelPostprocessor(BasePostprocessor):
                 pred_box2d_list.append(boxes2d_score)
                 pred_box3d_list.append(projected_boxes3d)
 
+        print(f'Number of predicted 2d boxes: {len(pred_box2d_list)}')
+        print(f'Number of predicted 3d boxes: {len(pred_box3d_list)}')
+
         if len(pred_box2d_list) ==0 or len(pred_box3d_list) == 0:
             return None, None
         # shape: (N, 5)
         pred_box2d_list = torch.vstack(pred_box2d_list)
+        print(f'Predicted 2d boxes shape: {pred_box2d_list.shape}')
         # scores
         scores = pred_box2d_list[:, -1]
         # predicted 3d bbx
         pred_box3d_tensor = torch.vstack(pred_box3d_list)
+        print(f'Predicted 3d boxes shape: {pred_box3d_tensor.shape}')
         # remove large bbx
         keep_index_1 = box_utils.remove_large_pred_bbx(pred_box3d_tensor, self.dataset)
         keep_index_2 = box_utils.remove_bbx_abnormal_z(pred_box3d_tensor)
@@ -360,10 +369,13 @@ class VoxelPostprocessor(BasePostprocessor):
 
         # STEP3
         # nms
+        print(f'Number of boxes before NMS: {pred_box3d_tensor.shape[0]}')
         keep_index = box_utils.nms_rotated(pred_box3d_tensor,
                                            scores,
                                            self.params['nms_thresh']
                                            )
+        print(f'Number of boxes after NMS: {keep_index.sum()}')
+
 
         pred_box3d_tensor = pred_box3d_tensor[keep_index]
 
@@ -372,12 +384,15 @@ class VoxelPostprocessor(BasePostprocessor):
 
         # filter out the prediction out of the range.
         #mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box3d_tensor, self.params['gt_range'])
+        print(f'Number of boxes after range filter: {pred_box3d_tensor.shape[0]}')
         mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box3d_tensor, self.params['anchor_args']['cav_lidar_range'])
         pred_box3d_tensor = pred_box3d_tensor[mask, :, :]
         scores = scores[mask]
 
+        print(f'Number of boxes after range filter: {pred_box3d_tensor.shape[0]}')
         assert scores.shape[0] == pred_box3d_tensor.shape[0]
 
+        print(f'Final predicted 3d boxes shape: {pred_box3d_tensor.shape}')
         # return pred_box3d_tensor, scores, count
         return pred_box3d_tensor, scores
 
