@@ -1,0 +1,183 @@
+# ==========================================================
+#   World‑Fusion (BM2CP × Where2Comm)   –   training config
+# ----------------------------------------------------------
+#   • OPV2V:   keep paths as‑is
+#   • V2X‑Sim: change root_dir / validate_dir / test_dir
+# ==========================================================
+
+name: worldfusion_opv2v_det
+
+# ---------- DATA -------------------------------------------------------------
+root_dir:        "data/OPV2V/train"      # <‑‑ edit for V2X‑Sim
+validate_dir:    "data/OPV2V/validate"
+test_dir:        "data/OPV2V/test"
+
+yaml_parser:     "load_cross_modal_point_pillar_params"
+
+train_params:
+  batch_size:   1
+  epoches:      50
+  eval_freq:    1
+  save_freq:    1
+  max_cav:      5                # 1 ego + up‑to‑4 RSUs/peers
+
+comm_range: 70                    # metres
+
+input_source:     ['lidar','camera','depth']
+label_type:       'lidar'
+cav_lidar_range: &cav_range [-140.8,-38.4,-3, 140.8,38.4,1]
+
+# ---------- PRE‑PROCESS ------------------------------------------------------
+preprocess:
+  core_method:  'SpVoxelPreprocessor'
+  args:
+    voxel_size:        &voxel_size [0.4,0.4,4]
+    max_points_per_voxel: 32
+    max_voxel_train:      32000
+    max_voxel_test:       70000
+  cav_lidar_range: *cav_range
+
+# ---------- FUSION (DATASET SIDE) -------------------------------------------
+fusion:
+  core_method: 'LiDARCameraIntermediateFusionDatasetOPV2V_V2'
+  args:
+    proj_first: true
+    grid_conf: &grid_conf                # camera BEV grid
+      xbound:  [-140.8,140.8,0.4]
+      ybound:  [-38.4,38.4,0.4]
+      zbound:  [-10,10,20]
+      ddiscr:  [2,50,48]
+      mode:    'LID'
+    data_aug_conf: &data_aug_conf
+      resize_lim: [0.7, 0.8]
+      final_dim:  [300, 400]
+      rot_lim:    [0, 0]
+      H: 600
+      W: 800
+      rand_flip:  False
+      bot_pct_lim: [0.0,0.20]
+      cams:   ['camera0','camera1','camera2','camera3']
+      Ncams:  4
+
+# ---------- ANCHOR / POST‑PROCESS -------------------------------------------
+postprocess:
+  core_method: 'VoxelPostprocessor'
+  gt_range: *cav_range
+  anchor_args:
+    cav_lidar_range: *cav_range
+    l: 3.9
+    w: 1.6 
+    h: 1.56
+    r: [0,90]
+    num: &anchor_num 2
+    feature_stride: 4
+  target_args:
+    pos_threshold:   0.6
+    neg_threshold:   0.45
+    score_threshold: 0.2
+  order:   'hwl'
+  max_num: 150
+  nms_thresh: 0.15
+  dir_args: &dir_args
+    dir_offset: 0.7853
+    num_bins:   2
+    anchor_yaw: [0,90]
+
+# ==========  MODEL ===========================================================
+model:
+  core_method: point_pillar_worldfusion      # <‑‑ NEW for WorldFusion
+  args:
+    ####  shared with BM2CP  ####
+    device:         cuda
+    supervise_single: False
+    backbone_fix:    False
+    anchor_number:   *anchor_num
+    outC:            256                    # after shrink‑conv
+    voxel_size:      *voxel_size
+    lidar_range:     *cav_range
+
+    # --------------- camera branch ---------------
+    img_params:
+      grid_conf:           *grid_conf
+      data_aug_conf:       *data_aug_conf
+      img_downsample:      8
+      bev_dim:             64
+      use_depth_gt:        false
+      depth_supervision:   false
+
+    # --------------- lidar branch ---------------
+    pc_params:
+      voxel_size: *voxel_size
+      lidar_range: *cav_range
+      pillar_vfe:
+        use_norm:          true
+        with_distance:     false
+        use_absolute_xyz:  true
+        num_filters:       [64]
+      point_pillar_scatter:
+        num_features:      64
+
+    # --------------- block‑level fusion ----------
+    modality_fusion:
+      bev_backbone:
+        encode_first: false
+        multi_scale:  true
+        layer_nums:         [3,4,5]
+        layer_strides:      [2,2,2]
+        num_filters:        [64,128,256]
+        upsample_strides:   [1,2,4]
+        num_upsample_filter: [128,128,128]
+        voxel_size:         *voxel_size
+
+      shrink_header:             # identical to BM2CP
+        use:         true
+        input_dim:   384          # 128×3
+        dim:         [256]
+        kernal_size: [3]
+        stride:      [2]
+        padding:     [1]
+
+      compression: 0             # no channel compressor
+
+    # --------------- cooperative fusion (Where2Comm) ----
+    fusion_args:                 # <‑‑ NEW: passed to Where2Comm
+      fully:            False
+      voxel_size:       *voxel_size
+      downsample_rate:  4
+      in_channels:      256
+      multi_scale:      true
+      layer_nums:       [3,4,5]
+      num_filters:      [64,128,256]
+      communication:
+        round: 1
+        threshold: 0.01
+        gaussian_smooth:
+          k_size: 5
+          c_sigma: 1.0
+
+    # --------------- world canvas  -----------------------   # <‑‑ NEW
+    canvas_res:    0.5       # metres / pixel
+    canvas_size_m: 200       # side length in metres
+
+    # --------------- dir‑head (optional) ------------------
+    dir_args: *dir_args
+
+loss:
+  core_method: point_pillar_loss
+  args:
+    cls_weight: 1.0
+    reg:        2.0
+
+optimizer:
+  core_method: Adam
+  lr: 2e-4
+  args:
+    eps: 1e-10
+    weight_decay: 1e-2
+
+lr_scheduler:
+  core_method: cosineannealwarm
+  epoches:      50
+  warmup_lr:    2e-5
+  warmup_epoches: 5
+  lr_min:       5e-6

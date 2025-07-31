@@ -263,6 +263,7 @@ class PointPillarBM2CP(nn.Module):
             spatial_features_2d = self.shrink_conv(spatial_features_2d)
         
         batch_dict['rm'] = self.reg_head(spatial_features_2d)
+        batch_dict['psm'] = self.cls_head(spatial_features_2d)
         # Overwrite spatial_features_2d in case shrink_conv was used
         batch_dict['spatial_features_2d'] = spatial_features_2d
 
@@ -382,72 +383,6 @@ class PointPillarBM2CP(nn.Module):
         
         return output_dict
 
-    def forward(self, data_dict):
-        print("[MODEL DEBUG] [forward] START")
-        lidar_inputs = data_dict['processed_lidar']
-        image_inputs = data_dict['image_inputs']
-        
-        # LiDAR Branch
-        print("[MODEL DEBUG] [forward] Calling pillar_vfe...")
-        batch_dict = self.pillar_vfe(lidar_inputs)
-        pillar_features, coords = batch_dict['pillar_features'], batch_dict['voxel_coords']
-        print(f"[MODEL DEBUG] [forward] VFE output pillar_features shape: {pillar_features.shape}")
-        
-        lidar_voxel_features = torch.zeros(
-            (1, self.pillar_vfe.get_output_feature_dim(), self.scatter.nz, self.scatter.ny, self.scatter.nx),
-            dtype=torch.float32, device=pillar_features.device
-        )
-        print(f"[MODEL DEBUG] [forward] Created empty 3D LiDAR grid with shape: {lidar_voxel_features.shape}")
-        lidar_voxel_features[coords[:, 0], :, coords[:, 1], coords[:, 2], coords[:, 3]] = pillar_features
-        print("[MODEL DEBUG] [forward] Scattered pillar features into 3D grid.")
-
-        # Camera Branch
-        print("[MODEL DEBUG] [forward] Calling get_geometry...")
-        geom = self.get_geometry(image_inputs)
-        print(f"[MODEL DEBUG] [forward] get_geometry returned geom with shape: {geom.shape}")
-        
-        x_cam = image_inputs['imgs']
-        B, N, C, H, W = x_cam.shape
-        x_cam = x_cam.view(B * N, C, H, W)
-        
-        print("[MODEL DEBUG] [forward] Calling camencode...")
-        _, x_cam = self.camencode(x_cam, image_inputs.get('depth_map'), data_dict['record_len'])
-        print(f"[MODEL DEBUG] [forward] camencode returned features with shape: {x_cam.shape}")
-        
-        x_cam = x_cam.view(B, N, self.bevC, self.D, H//self.downsample, W//self.downsample).permute(0, 1, 3, 4, 5, 2)
-        
-        print("[MODEL DEBUG] [forward] Calling voxel_pooling...")
-        camera_voxel_features = self.voxel_pooling(geom, x_cam)
-        print(f"[MODEL DEBUG] [forward] Voxel pooling returned camera features with shape: {camera_voxel_features.shape}")
-        
-        # Fusion
-        print("[MODEL DEBUG] [forward] Calling fusion module...")
-        print(f"[MODEL DEBUG] [forward] Camera voxel features shape: {camera_voxel_features.shape}, LiDAR voxel features shape: {lidar_voxel_features.shape}")
-        print(f"[MODEL DEBUG] [forward] Camera voxel features device: {camera_voxel_features.device}, LiDAR voxel features device: {lidar_voxel_features.device}")
-        fused_2d_bev = self.fusion(camera_voxel_features, lidar_voxel_features)
-        print(f"[MODEL DEBUG] [forward] Fusion module returned 2D BEV map with shape: {fused_2d_bev.shape}")
-        
-        # Backbone and Heads
-        print("[MODEL DEBUG] [forward] Calling backbone...")
-        final_features = self.backbone(fused_2d_bev)
-        print(f"[MODEL DEBUG] [forward] Backbone returned features with shape: {final_features.shape}")
-        
-        if self.shrink_flag:
-            final_features = self.shrink_conv(final_features)
-        
-        psm = self.cls_head(final_features)
-        rm = self.reg_head(final_features)
-        print(f"[MODEL DEBUG] [forward] Heads output shapes: psm: {psm.shape}, rm: {rm.shape}")
-        
-        output_dict = {'psm': psm, 'rm': rm}
-        if self.use_dir:
-            output_dict['dm'] = self.dir_head(final_features)
-        
-        self.bev_feature = psm
-        print(f"[MODEL DEBUG] [forward] Output dictionary keys: {output_dict.keys()}")
-        print("[MODEL DEBUG] [forward] COMPLETE")
-        return output_dict
-    
     def get_geometry(self, image_inputs_dict):
         """Determine the (x,y,z) locations (in the ego frame)
         of the points in the point cloud.

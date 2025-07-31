@@ -58,8 +58,7 @@ preprocess:
     max_voxel_train: 32000
     max_voxel_test: 70000
   # LiDAR range for each individual CAV
-  cav_lidar_range: &cav_lidar [ -140.8, -200, -3, 140.8, 200, 1 ]
-  #cav_lidar_range: &cav_lidar [ -140.8, -38.4, -3, 140.8, 38.4, 1 ]
+  cav_lidar_range: &cav_lidar [ -140.8, -38.4, -3, 140.8, 38.4, 1 ]
 
 data_augment:
   - NAME: random_world_flip

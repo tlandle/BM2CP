@@ -167,9 +167,24 @@ class AttenComm(nn.Module):
                     batch_confidence_maps = self.regroup(rm, record_len)
                     batch_level_thres_map = self.regroup(level_thres_map, record_len)
                     _, communication_masks, communication_rates = communication(batch_confidence_maps, batch_level_thres_map, record_len, pairwise_t_matrix)
+                    # ------------- safe keep‑ratio debug -----------------
+                    if True:                                   # keep the guard if you like
+                        # -------------------------------------------------------
+                        # place this right after `communication()` is called,
+                        # inside the   if i==0:   block of AttenComm.forward
+                        # -------------------------------------------------------
+                        num_agents = int(record_len[0].item())      # e.g. 2
+                        print(f"[COMM‑DBG] {num_agents} agents, "
+                              f"{communication_masks.shape[-2]}x{communication_masks.shape[-1]} feature map")
+
+                        for ag in range(num_agents):
+                            keep_ratio = communication_masks[ag, 0].float().mean().item()
+                            print(f"[COMM‑DBG] keep‑ratio agent{ag}: {keep_ratio:.4f}")
+
                     if x.shape[-1] != communication_masks.shape[-1]:
                         communication_masks = F.interpolate(communication_masks, size=(x.shape[-2], x.shape[-1]), mode='bilinear', align_corners=False)
                     x = x * communication_masks
+
 
                 # split x:[(L1, C, H, W), (L2, C, H, W), ...]
                 # for example [[2, 256, 50, 176], [1, 256, 50, 176], ...]

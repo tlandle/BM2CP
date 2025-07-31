@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Author: Runsheng Xu <rxx3386@ucla.edu>, OpenPCDet
+#: Runsheng Xu <rxx3386@ucla.edu>, OpenPCDet
 # License: TDG-Attribution-NonCommercial-NoDistrib
 
 
@@ -269,6 +269,7 @@ class VoxelPostprocessor(BasePostprocessor):
             The groundtruth bounding box tensor.
         """
         # the final bounding box list
+        print(f"[POST DBG] Entered VoxelPostprocessor.post_process from {__file__}", flush=True)
         pred_box3d_list = []
         pred_box2d_list = []
 
@@ -304,6 +305,10 @@ class VoxelPostprocessor(BasePostprocessor):
             boxes3d = torch.masked_select(batch_box3d[0],
                                           mask_reg[0]).view(-1, 7)
             scores = torch.masked_select(prob[0], mask[0])
+            print(f"[POST DBG] after delta->box decode: {boxes3d.shape[0]} boxes", flush=True)
+
+            print(">>> After score mask:", boxes3d.shape, scores.shape)
+            print("scores top-k:", torch.topk(scores, k=min(5, scores.numel())).values)
 
             # adding dir classifier
             if 'dm' in output_dict[cav_id].keys() and len(boxes3d) !=0:
@@ -330,6 +335,18 @@ class VoxelPostprocessor(BasePostprocessor):
                 boxes3d_corner = \
                     box_utils.boxes_to_corners_3d(boxes3d,
                                                   order=self.params['order'])
+
+            # ░░ inside VoxelPostprocessor.post_process ░░
+                scores_np      = scores.detach().cpu().numpy()
+
+                print("\n=== RAW DETECTIONS (before size / score filter) ===")
+                for k in range(min(10, boxes3d.shape[0])):          # first 10
+                    # convert centre‑based box to world frame ↓↓↓
+                    cn_x, cn_y, cn_z, h, w, l, yaw = boxes3d[k].detach().cpu().numpy()
+                    print(f"[{k:02d}] xyz=({cn_x:+7.2f},{cn_y:+7.2f},{cn_z:+4.2f})  "
+                          f"lwh=({l:4.2f},{w:4.2f},{h:4.2f})  yaw={np.degrees(yaw):5.1f}°  "
+                          f"score={scores_np[k]:.3f}")
+                print("===============================================\n")
                 
                 # STEP 2
                 # (N, 8, 3)
@@ -350,6 +367,7 @@ class VoxelPostprocessor(BasePostprocessor):
         print(f'Number of predicted 3d boxes: {len(pred_box3d_list)}')
 
         if len(pred_box2d_list) ==0 or len(pred_box3d_list) == 0:
+            print("[POST DBG] No boxes produced at all (prob threshold wiped everything).", flush=True)
             return None, None
         # shape: (N, 5)
         pred_box2d_list = torch.vstack(pred_box2d_list)
@@ -363,6 +381,9 @@ class VoxelPostprocessor(BasePostprocessor):
         keep_index_1 = box_utils.remove_large_pred_bbx(pred_box3d_tensor, self.dataset)
         keep_index_2 = box_utils.remove_bbx_abnormal_z(pred_box3d_tensor)
         keep_index = torch.logical_and(keep_index_1, keep_index_2)
+        print(f'Number of boxes before filter: {pred_box3d_tensor.shape[0]}')
+        print(f'Number of boxes after filter: {keep_index.sum()}')
+        print(">>> keep_index:", keep_index, keep_index.sum())
 
         pred_box3d_tensor = pred_box3d_tensor[keep_index]
         scores = scores[keep_index]
@@ -374,7 +395,8 @@ class VoxelPostprocessor(BasePostprocessor):
                                            scores,
                                            self.params['nms_thresh']
                                            )
-        print(f'Number of boxes after NMS: {keep_index.sum()}')
+        print(f'Number of boxes after NMS: {keep_index.numel() if torch.is_tensor(keep_index) else len(keep_index)}')
+        print(">>> keep_index:", keep_index, keep_index.sum())
 
 
         pred_box3d_tensor = pred_box3d_tensor[keep_index]
@@ -384,12 +406,14 @@ class VoxelPostprocessor(BasePostprocessor):
 
         # filter out the prediction out of the range.
         #mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box3d_tensor, self.params['gt_range'])
-        print(f'Number of boxes after range filter: {pred_box3d_tensor.shape[0]}')
+        print(f'Number of boxes before range filter: {pred_box3d_tensor.shape[0]}')
         mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box3d_tensor, self.params['anchor_args']['cav_lidar_range'])
         pred_box3d_tensor = pred_box3d_tensor[mask, :, :]
         scores = scores[mask]
-
         print(f'Number of boxes after range filter: {pred_box3d_tensor.shape[0]}')
+        print(f'Range mask keeps: {mask.sum().item()}')
+        print(">>> mask:", mask, mask.sum())
+        print(">>> scores:", scores, scores.shape)
         assert scores.shape[0] == pred_box3d_tensor.shape[0]
 
         print(f'Final predicted 3d boxes shape: {pred_box3d_tensor.shape}')
