@@ -1,12 +1,12 @@
-# BM2CP
-[CoRL 2023] BM2CP: Efficient Collaborative Perception with LiDAR-Camera Modalities
+# WorldFusion
+Collaborative Perception with LiDAR-Camera Modalities Outputting In World Coordinates for Real Time Pipeline
 
 ## Overview
-![Where2comm](./images/Workflow.png)
-**Abstract:** Collaborative perception enables agents to share complementary perceptual information with nearby agents. This can significantly benefit the perception performance and alleviate the issues of single-view perception, such as occlusion and sparsity. Most proposed approaches mainly focus on single modality (especially LiDAR), and not fully exploit the superiority of multi-modal perception. We propose an collaborative perception paradigm, BM2CP, which employs LiDAR and camera to achieve efficient multi-modal perception. BM2CP utilizes LiDAR-guided modal fusion, cooperative depth generation and modality-guided intermediate fusion to acquire deep interactions between modalities and agents. Moreover, it is capable to cope with the special case that one of the sensors is unavailable. Extensive experiments validate that it outperforms the state-of-the-art methods with 50X lower communication volumes in real-world autonomous driving scenarios.
+![Where2comm](./images/Workflo
 
 
 ## Updates
+- 2025/08/03 Support Worldfusion in OPV2V Dataset and V2XSim 2.0. 
 - 2024/04/29 Support BM2CP in OPV2V dataset.
 - 2024/03/12 Support How2comm(NeurIPS2023).
 - 2024/01/28 Support OPV2V dataset. Support SCOPE(ICCV2023). Fix bugs in fusion dataset that cause abnormal performance in presence of pose error. 
@@ -18,8 +18,8 @@
 - Dataset Support
   - [x] OPV2V
   - [ ] V2XSet
-  - [ ] V2X-Sim 2.0
-  - [x] DAIR-V2X
+  - [x] V2X-Sim 2.0
+  - [ ] DAIR-V2X
 
 - Spconv Support
   - [x] 1.2.1
@@ -38,6 +38,7 @@
     - [x] [BM2CP (CoRL2023)](https://arxiv.org/abs/2310.14702)
     - [x] [SCOPE (ICCV2023)](https://arxiv.org/abs/2307.13929)
     - [x] [How2comm (NeurIPS2023)](https://openreview.net/pdf?id=Dbaxm9ujq6)
+    - [x] [WorldFusion] 
 
 - Visualization
   - [x] BEV visualization
@@ -48,9 +49,8 @@
 #### Download dataset 
 ##### 1. OPV2V
 Download raw data of [OPV2V](https://ucla.app.box.com/v/UCLA-MobilityLab-OPV2V) relseased by Official.
-##### 2. DAIR-V2X
-1. Download raw data of [DAIR-V2X](https://drive.google.com/drive/folders/1gnrw5llXAIxuB9sEKKCm6xTaJ5HQAw2e).
-2. Download complemented annotation from [Yifan Lu](https://github.com/yifanlu0227/CoAlign).
+##### 2. V2XSim 2.0
+TODO
 
 #### Install
 Please refer to the [INSTALL.md](./INSTALL.md) for detailed documentations. 
