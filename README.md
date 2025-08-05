@@ -74,14 +74,14 @@ Arguments Explanation:
 an early fusion model which utilizes SECOND as the backbone. See [Tutorial 1: Config System](https://opencood.readthedocs.io/en/latest/md_files/config_tutorial.html) to learn more about the rules of the yaml files.
 - `model_dir` (optional) : the path of the checkpoints. This is used to fine-tune the trained models. When the `model_dir` is given, the trainer will discard the `hypes_yaml` and load the `config.yaml` in the checkpoint folder.
 
-For example, to train BM2CP from scratch:
+For example, to train WorldFusion from scratch:
 ```
-python opencood/tools/train.py --hypes_yaml opencood/hypes_yaml/dair-v2x/dair_bm2cp.yaml
+python opencood/tools/train.py --hypes_yaml opencood/hypes_yaml/opv2v/opv2v_worldfusion.yaml
 ```
 
 To train BM2CP from a checkpoint:
 ```
-python opencood/tools/train.py --hypes_yaml opencood/hypes_yaml/dair-v2x/dair_bm2cp.yaml --model_dir opencood/logs/dair_bm2cp_2023_11_28_08_52_46
+python opencood/tools/train.py --hypes_yaml opencood/hypes_yaml/opv2v/opv2v_worldfusion.yaml --model_dir opencood/logs/opv2v_xxxx
 ```
 
 #### Test the model
@@ -98,21 +98,6 @@ Arguments Explanation:
 - `save_vis`: bool. Wether to save the visualization result.
 
 The evaluation results  will be dumped in the model directory.
-
-## Citation
-If you are using our project for your research, please cite the following paper:
-
-```
-
-@InProceedings{zhao2023bm,
-  title = {BM2CP: Efficient Collaborative Perception with LiDAR-Camera Modalities},
-  author = {Zhao, Binyu and ZHANG, Wei and Zou, Zhaonian},
-  booktitle = {Proceedings of The 7th Conference on Robot Learning},
-  pages = {1022--1035},
-  year = {2023},
-  series = {Proceedings of Machine Learning Research},
-}
-```
 
 ## Acknowledgements
 Thank for the excellent cooperative perception codebases [OpenCOOD](https://github.com/DerrickXuNu/OpenCOOD), [CoPerception](https://github.com/coperception/coperception) and [Where2comm](https://github.com/MediaBrain-SJTU/Where2comm).
