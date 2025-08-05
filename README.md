@@ -2,7 +2,6 @@
 Collaborative Perception with LiDAR-Camera Modalities Outputting In World Coordinates for Real Time Pipeline
 
 ## Overview
-![Where2comm](./images/Workflo
 
 
 ## Updates
